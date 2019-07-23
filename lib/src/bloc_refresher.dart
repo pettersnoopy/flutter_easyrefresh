@@ -2,14 +2,20 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_easyrefresh/easy_refresh.dart';
+import 'package:flutter_easyrefresh/src/bloc_refresher_bloc.dart';
+import 'package:flutter_easyrefresh/src/bloc_refresher_event.dart';
+import 'package:flutter_easyrefresh/src/bloc_refresher_state.dart';
 
 import 'behavior/behavior.dart';
 import 'footer/footer.dart';
 import 'header/header.dart';
 import 'scrollPhysics/scroll_physics.dart';
 
-class EasyRefresh extends StatefulWidget {
+class BlocEasyRefresh extends StatefulWidget {
+  // 区分不同的event/state，否则会互相影响
+  final String uniqueKey;
   // 加载刷新回调
   final OnRefresh onRefresh;
   final LoadMore loadMore;
@@ -45,8 +51,8 @@ class EasyRefresh extends StatefulWidget {
   // 列表构建器
   final RefresherTransitionBuilder builder;
 
-  EasyRefresh(
-      {GlobalKey<EasyRefreshState> key,
+  BlocEasyRefresh(
+      {GlobalKey<BlocEasyRefreshState> key,
       this.behavior,
       this.refreshHeader,
       this.refreshFooter,
@@ -65,24 +71,25 @@ class EasyRefresh extends StatefulWidget {
       this.firstRefresh: false,
       this.outerController,
       this.builder,
+      @required this.uniqueKey,
       @required this.child})
       : super(key: key) {
     assert(child != null);
   }
 
   // 获取键
-  GlobalKey<EasyRefreshState> getKey() {
+  GlobalKey<BlocEasyRefreshState> getKey() {
     return this.key;
   }
 
   @override
-  EasyRefreshState createState() {
-    return new EasyRefreshState();
+  BlocEasyRefreshState createState() {
+    return new BlocEasyRefreshState();
   }
 }
 
-class EasyRefreshState extends State<EasyRefresh>
-    with TickerProviderStateMixin<EasyRefresh> {
+class BlocEasyRefreshState extends State<BlocEasyRefresh>
+    with TickerProviderStateMixin<BlocEasyRefresh> {
   // 滚动控制器
   ScrollController _scrollController;
   // 滚动形式
@@ -638,52 +645,9 @@ class EasyRefreshState extends State<EasyRefresh>
 
   void _refreshStart(
       RefreshBoxDirectionStatus refreshBoxDirectionStatus) async {
-    this._isRefresh = true;
-    _checkStateAndCallback(
-        AnimationStates.StartLoadData, refreshBoxDirectionStatus);
-    // 是否限制滚动
-    setState(() {
-      if (widget.limitScroll) {
-        _scrollPhysics = _neverScrollableScrollPhysics;
-      } else {
-        _scrollPhysics = RefreshAlwaysScrollPhysics(
-            scrollOverListener: _getScrollOverListener(),
-            headerPullBackRecord: false,
-            footerPullBackRecord: false);
-      }
-    });
-    // 这里我们开始加载数据 数据加载完成后，将新数据处理并开始加载完成后的处理
-    if (_topItemHeight > _bottomItemHeight) {
-      if (widget.onRefresh != null) {
-        // 调用刷新回调
-        await widget.onRefresh();
-        // 稍作延时(等待列表加载完成,用于界面修改数据)
-        await new Future.delayed(const Duration(milliseconds: 100), () {});
-      }
-    } else {
-      if (widget.loadMore != null) {
-        // 调用加载更多
-        await widget.loadMore();
-        // 稍作延时(等待列表加载完成,用于界面修改数据以及判断前后条数差异)
-        //await new Future.delayed(const Duration(milliseconds: 100), () {});
-      }
-    }
-    // 判断是否自动控制
-    if (widget.autoControl) {
-      if (!mounted) return;
-      _checkStateAndCallback(
-          AnimationStates.LoadDataEnd, refreshBoxDirectionStatus);
-      if (refreshBoxDirectionStatus == RefreshBoxDirectionStatus.PULL) {
-        await Future.delayed(
-            new Duration(milliseconds: this._refreshHeader.finishDelay));
-      } else if (refreshBoxDirectionStatus == RefreshBoxDirectionStatus.PUSH) {
-        await Future.delayed(
-            new Duration(milliseconds: this._refreshFooter.finishDelay));
-      }
-      if (!this.mounted) return;
-      // 开始将加载（刷新）布局缩回去的动画
-      _animationController.forward();
-    }
+    BlocRefresherBloc().dispatch(RefreshingBlocRefresherEvent(
+        uniqueKey: widget.uniqueKey,
+        refreshBoxDirectionStatus: refreshBoxDirectionStatus));
   }
 
   @override
@@ -1147,63 +1111,128 @@ class EasyRefreshState extends State<EasyRefresh>
             widget.outerController == null
                 ? _scrollController
                 : widget.outerController);
-    return new Container(
-      child: Stack(
-        children: <Widget>[
-          new Column(
-            children: <Widget>[
-              widget.onRefresh == null || !(header as RefreshHeader).isFloat
-                  ? header
-                  : new Container(),
-              new Expanded(
-                flex: 1,
-                child: new NotificationListener(
-                  onNotification: (ScrollNotification notification) {
-                    // 判断是否正在加载
-                    if (_isRefresh) return true;
-                    ScrollMetrics metrics = notification.metrics;
-                    computeScrollSpeed(metrics.pixels);
-                    if (notification is ScrollStartNotification) {
-                      if (notification.dragDetails != null) {
-                        _isDrag = true;
+    return BlocListener(
+      bloc: BlocRefresherBloc(),
+      listener: (BuildContext context, BlocRefresherState state) async {
+        if (state is RefreshingBlocRefresherState) {
+          if (state.uniqueKey != widget.uniqueKey) {
+            return;
+          }
+          this._isRefresh = true;
+          _checkStateAndCallback(
+              AnimationStates.StartLoadData, state.refreshBoxDirectionStatus);
+          // 是否限制滚动
+          setState(() {
+            if (widget.limitScroll) {
+              _scrollPhysics = _neverScrollableScrollPhysics;
+            } else {
+              _scrollPhysics = RefreshAlwaysScrollPhysics(
+                  scrollOverListener: _getScrollOverListener(),
+                  headerPullBackRecord: false,
+                  footerPullBackRecord: false);
+            }
+          });
+          // 这里我们开始加载数据 数据加载完成后，将新数据处理并开始加载完成后的处理
+          if (_topItemHeight > _bottomItemHeight) {
+            if (widget.onRefresh != null) {
+              // 调用刷新回调
+              await widget.onRefresh();
+              // 稍作延时(等待列表加载完成,用于界面修改数据)
+              await new Future.delayed(
+                  const Duration(milliseconds: 100), () {});
+            }
+          } else {
+            if (widget.loadMore != null) {
+              // 调用加载更多
+              await widget.loadMore();
+              // 稍作延时(等待列表加载完成,用于界面修改数据以及判断前后条数差异)
+              //await new Future.delayed(const Duration(milliseconds: 100), () {});
+            }
+          }
+          return;
+        }
+        if (state is RefreshedBlocRefresherState) {
+          if (state.uniqueKey != widget.uniqueKey) {
+            return;
+          }
+          if (widget.autoControl) {
+            if (!mounted) return;
+            RefreshBoxDirectionStatus status = state.refreshBoxDirectionStatus;
+            _checkStateAndCallback(AnimationStates.LoadDataEnd, status);
+            if (status == RefreshBoxDirectionStatus.PULL) {
+              await Future.delayed(
+                  new Duration(milliseconds: this._refreshHeader.finishDelay));
+            } else if (status == RefreshBoxDirectionStatus.PUSH) {
+              await Future.delayed(
+                  new Duration(milliseconds: this._refreshFooter.finishDelay));
+            }
+            if (!this.mounted) return;
+            // 开始将加载（刷新）布局缩回去的动画
+            _animationController.forward();
+          }
+          return;
+        }
+      },
+      child: Container(
+        child: Stack(
+          children: <Widget>[
+            new Column(
+              children: <Widget>[
+                widget.onRefresh == null || !(header as RefreshHeader).isFloat
+                    ? header
+                    : new Container(),
+                new Expanded(
+                  flex: 1,
+                  child: new NotificationListener(
+                    onNotification: (ScrollNotification notification) {
+                      // 判断是否正在加载
+                      if (_isRefresh) return true;
+                      ScrollMetrics metrics = notification.metrics;
+                      computeScrollSpeed(metrics.pixels);
+                      if (notification is ScrollStartNotification) {
+                        if (notification.dragDetails != null) {
+                          _isDrag = true;
+                        }
+                      } else if (notification is ScrollUpdateNotification) {
+                        _handleScrollUpdateNotification(notification);
+                      } else if (notification is ScrollEndNotification) {
+                        _handleScrollEndNotification();
+                      } else if (notification is UserScrollNotification) {
+                        _handleUserScrollNotification(notification);
+                        // } else if (metrics.atEdge && notification is OverscrollNotification) { // 加上metrics.atEdge验证，多次滑动会导致加载卡住
+                      } else if (notification is OverscrollNotification) {
+                        _handleOverScrollNotification(notification);
                       }
-                    } else if (notification is ScrollUpdateNotification) {
-                      _handleScrollUpdateNotification(notification);
-                    } else if (notification is ScrollEndNotification) {
-                      _handleScrollEndNotification();
-                    } else if (notification is UserScrollNotification) {
-                      _handleUserScrollNotification(notification);
-                      // } else if (metrics.atEdge && notification is OverscrollNotification) { // 加上metrics.atEdge验证，多次滑动会导致加载卡住
-                    } else if (notification is OverscrollNotification) {
-                      _handleOverScrollNotification(notification);
-                    }
-                    _lastScrollNotification = notification;
-                    return false;
-                  },
-                  child: ScrollConfiguration(
-                    behavior: widget.behavior ?? new RefreshBehavior(),
-                    child: listWidget,
+                      _lastScrollNotification = notification;
+                      return false;
+                    },
+                    child: ScrollConfiguration(
+                      behavior: widget.behavior ?? new RefreshBehavior(),
+                      child: listWidget,
+                    ),
                   ),
                 ),
-              ),
-              widget.loadMore == null || !(footer as RefreshFooter).isFloat
-                  ? footer
-                  : new Container(),
-            ],
-          ),
-          Align(
-            alignment: Alignment.topCenter,
-            child: widget.onRefresh != null && (header as RefreshHeader).isFloat
-                ? header
-                : new Container(),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: widget.loadMore != null && (footer as RefreshFooter).isFloat
-                ? footer
-                : new Container(),
-          ),
-        ],
+                widget.loadMore == null || !(footer as RefreshFooter).isFloat
+                    ? footer
+                    : new Container(),
+              ],
+            ),
+            Align(
+              alignment: Alignment.topCenter,
+              child:
+                  widget.onRefresh != null && (header as RefreshHeader).isFloat
+                      ? header
+                      : new Container(),
+            ),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child:
+                  widget.loadMore != null && (footer as RefreshFooter).isFloat
+                      ? footer
+                      : new Container(),
+            ),
+          ],
+        ),
       ),
     );
   }

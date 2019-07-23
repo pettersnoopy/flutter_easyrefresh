@@ -5,8 +5,12 @@
  */
 library easyrefresh;
 
-export 'src/refresher.dart';
-export 'src/header/header.dart';
-export 'src/footer/footer.dart';
 export 'src/behavior/behavior.dart';
+export 'src/bloc_refresher.dart';
+export 'src/bloc_refresher_bloc.dart';
+export 'src/bloc_refresher_event.dart';
+export 'src/defines.dart';
+export 'src/footer/footer.dart';
+export 'src/header/header.dart';
 export 'src/refresh_safe_area.dart';
+export 'src/refresher.dart';
